@@ -22,8 +22,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import java.util.Optional;
-import javax.annotation.processing.ProcessingEnvironment;
-import javax.lang.model.util.Types;
 
 /**
  * Variables to substitute into the autovalue.vm or builder.vm template.
@@ -109,11 +107,12 @@ abstract class AutoValueOrBuilderTemplateVars extends AutoValueishTemplateVars {
    *
    * <ul>
    *   <li>it is {@code @Nullable} (in which case it defaults to null);
-   *   <li>it is {@code Optional} (in which case it defaults to empty);
+   *   <li>it has a builder initializer (for example it is {@code Optional}, which will have an
+   *       initializer of {@code Optional.empty()});
    *   <li>it has a property-builder method (in which case it defaults to empty).
    * </ul>
    */
-  ImmutableSet<Property> builderRequiredProperties = ImmutableSet.of();
+  BuilderRequiredProperties builderRequiredProperties = BuilderRequiredProperties.EMPTY;
 
   /**
    * A map from property names to information about the associated property getter. A property
@@ -125,10 +124,16 @@ abstract class AutoValueOrBuilderTemplateVars extends AutoValueishTemplateVars {
 
   /**
    * True if the generated builder should have a second constructor with a parameter of the built
-   * class. The constructor produces a new builder that starts off with the values from the
+   * type. The constructor produces a new builder that starts off with the values from the
    * parameter.
    */
   Boolean toBuilderConstructor;
+
+  /**
+   * Any {@code toBuilder()} methods, that is methods that return the builder type. AutoBuilder does
+   * not support this, but it's included in these shared variables to simplify the template.
+   */
+  ImmutableList<SimpleMethod> toBuilderMethods;
 
   /**
    * Whether to include identifiers in strings in the generated code. If false, exception messages
@@ -142,7 +147,4 @@ abstract class AutoValueOrBuilderTemplateVars extends AutoValueishTemplateVars {
    * subclasses)
    */
   Boolean isFinal = false;
-
-  /** The type utilities returned by {@link ProcessingEnvironment#getTypeUtils()}. */
-  Types types;
 }

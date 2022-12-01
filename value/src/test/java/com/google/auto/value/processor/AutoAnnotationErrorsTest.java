@@ -57,35 +57,8 @@ public class AutoAnnotationErrorsTest {
             "  }",
             "}");
     Compilation compilation =
-        javac()
-            .withProcessors(new AutoAnnotationProcessor())
-            .compile(TEST_ANNOTATION, testSource);
+        javac().withProcessors(new AutoAnnotationProcessor()).compile(TEST_ANNOTATION, testSource);
     assertThat(compilation).succeededWithoutWarnings();
-  }
-
-  @Test
-  public void testNotStatic() {
-    JavaFileObject testSource =
-        JavaFileObjects.forSourceLines(
-            "com.foo.Test",
-            "package com.foo;",
-            "",
-            "import com.example.TestAnnotation;",
-            "import com.google.auto.value.AutoAnnotation;",
-            "",
-            "class Test {",
-            "  @AutoAnnotation TestAnnotation newTestAnnotation(int value) {",
-            "    return new AutoAnnotation_Test_newTestAnnotation(value);",
-            "  }",
-            "}");
-    Compilation compilation =
-        javac()
-            .withProcessors(new AutoAnnotationProcessor())
-            .compile(TEST_ANNOTATION, testSource);
-    assertThat(compilation)
-        .hadErrorContaining("must be static")
-        .inFile(testSource)
-        .onLineContaining("TestAnnotation newTestAnnotation(int value)");
   }
 
   @Test
@@ -103,9 +76,7 @@ public class AutoAnnotationErrorsTest {
             "  }",
             "}");
     Compilation compilation =
-        javac()
-            .withProcessors(new AutoAnnotationProcessor())
-            .compile(TEST_ANNOTATION, testSource);
+        javac().withProcessors(new AutoAnnotationProcessor()).compile(TEST_ANNOTATION, testSource);
     assertThat(compilation)
         .hadErrorContaining("must be an annotation type, not java.lang.String")
         .inFile(testSource)
@@ -132,9 +103,7 @@ public class AutoAnnotationErrorsTest {
             "  }",
             "}");
     Compilation compilation =
-        javac()
-            .withProcessors(new AutoAnnotationProcessor())
-            .compile(TEST_ANNOTATION, testSource);
+        javac().withProcessors(new AutoAnnotationProcessor()).compile(TEST_ANNOTATION, testSource);
     assertThat(compilation)
         .hadErrorContaining("@AutoAnnotation methods cannot be overloaded")
         .inFile(testSource)
@@ -196,9 +165,7 @@ public class AutoAnnotationErrorsTest {
             "  }",
             "}");
     Compilation compilation =
-        javac()
-            .withProcessors(new AutoAnnotationProcessor())
-            .compile(TEST_ANNOTATION, testSource);
+        javac().withProcessors(new AutoAnnotationProcessor()).compile(TEST_ANNOTATION, testSource);
     assertThat(compilation)
         .hadErrorContaining("method parameter 'fred' must have the same name")
         .inFile(testSource)
@@ -221,9 +188,7 @@ public class AutoAnnotationErrorsTest {
             "  }",
             "}");
     Compilation compilation =
-        javac()
-            .withProcessors(new AutoAnnotationProcessor())
-            .compile(TEST_ANNOTATION, testSource);
+        javac().withProcessors(new AutoAnnotationProcessor()).compile(TEST_ANNOTATION, testSource);
     assertThat(compilation)
         .hadErrorContaining(
             "method parameter 'value' has type java.lang.String "
@@ -267,9 +232,7 @@ public class AutoAnnotationErrorsTest {
               "  }",
               "}");
       Compilation compilation =
-          javac()
-              .withProcessors(new AutoAnnotationProcessor())
-              .compile(testSource, testAnnotation);
+          javac().withProcessors(new AutoAnnotationProcessor()).compile(testSource, testAnnotation);
       assertThat(compilation)
           .hadErrorContaining(
               "method parameter 'value' has type "
@@ -296,9 +259,7 @@ public class AutoAnnotationErrorsTest {
             "  }",
             "}");
     Compilation compilation =
-        javac()
-            .withProcessors(new AutoAnnotationProcessor())
-            .compile(TEST_ANNOTATION, testSource);
+        javac().withProcessors(new AutoAnnotationProcessor()).compile(TEST_ANNOTATION, testSource);
     assertThat(compilation)
         .hadErrorContaining(
             "method parameter 'other' must have the same name as a member of "
@@ -323,9 +284,7 @@ public class AutoAnnotationErrorsTest {
             "  }",
             "}");
     Compilation compilation =
-        javac()
-            .withProcessors(new AutoAnnotationProcessor())
-            .compile(TEST_ANNOTATION, testSource);
+        javac().withProcessors(new AutoAnnotationProcessor()).compile(TEST_ANNOTATION, testSource);
     assertThat(compilation)
         .hadErrorContaining("method needs a parameter with name 'value' and type int")
         .inFile(testSource)
@@ -357,9 +316,7 @@ public class AutoAnnotationErrorsTest {
             "  }",
             "}");
     Compilation compilation =
-        javac()
-            .withProcessors(new AutoAnnotationProcessor())
-            .compile(annotationSource, testSource);
+        javac().withProcessors(new AutoAnnotationProcessor()).compile(annotationSource, testSource);
     assertThat(compilation)
         .hadErrorContaining(
             "@AutoAnnotation cannot yet supply a default value for annotation-valued member "
@@ -399,10 +356,7 @@ public class AutoAnnotationErrorsTest {
             "  }",
             "}");
     Compilation compilation =
-        javac()
-            .withProcessors(new AutoAnnotationProcessor())
-            .compile(annotationSource, testSource);
-    assertThat(compilation)
-        .hadErrorContaining("variable value$ is already defined in constructor");
+        javac().withProcessors(new AutoAnnotationProcessor()).compile(annotationSource, testSource);
+    assertThat(compilation).hadErrorContaining("variable value$ is already defined in constructor");
   }
 }

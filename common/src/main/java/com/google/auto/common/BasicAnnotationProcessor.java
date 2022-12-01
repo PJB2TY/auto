@@ -17,19 +17,19 @@ package com.google.auto.common;
 
 import static com.google.auto.common.MoreElements.asExecutable;
 import static com.google.auto.common.MoreElements.asPackage;
+import static com.google.auto.common.MoreElements.isAnnotationPresent;
+import static com.google.auto.common.MoreStreams.toImmutableMap;
+import static com.google.auto.common.MoreStreams.toImmutableSet;
 import static com.google.auto.common.SuperficialValidation.validateElement;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Iterables.transform;
 import static com.google.common.collect.Multimaps.filterKeys;
-import static java.util.stream.Collectors.collectingAndThen;
-import static java.util.stream.Collectors.toList;
-import static java.util.stream.Collectors.toMap;
+import static java.util.Objects.requireNonNull;
 import static javax.lang.model.element.ElementKind.PACKAGE;
 import static javax.tools.Diagnostic.Kind.ERROR;
 
 import com.google.common.base.Ascii;
-import com.google.common.base.Optional;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -42,6 +42,7 @@ import com.google.common.collect.Sets;
 import java.lang.annotation.Annotation;
 import java.util.LinkedHashSet;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Messager;
@@ -49,13 +50,13 @@ import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.Processor;
 import javax.annotation.processing.RoundEnvironment;
 import javax.lang.model.element.Element;
-import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Name;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.ErrorType;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.SimpleElementVisitor8;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
  * An abstract {@link Processor} implementation that defers processing of {@link Element}s to later
@@ -162,14 +163,14 @@ public abstract class BasicAnnotationProcessor extends AbstractProcessor {
     checkState(steps != null);
     return steps.stream()
         .flatMap(step -> getSupportedAnnotationTypeElements(step).stream())
-        .collect(collectingAndThen(toList(), ImmutableSet::copyOf));
+        .collect(toImmutableSet());
   }
 
   private ImmutableSet<TypeElement> getSupportedAnnotationTypeElements(Step step) {
     return step.annotations().stream()
         .map(elements::getTypeElement)
         .filter(Objects::nonNull)
-        .collect(collectingAndThen(toList(), ImmutableSet::copyOf));
+        .collect(toImmutableSet());
   }
 
   /**
@@ -179,9 +180,7 @@ public abstract class BasicAnnotationProcessor extends AbstractProcessor {
   @Override
   public final ImmutableSet<String> getSupportedAnnotationTypes() {
     checkState(steps != null);
-    return steps.stream()
-        .flatMap(step -> step.annotations().stream())
-        .collect(collectingAndThen(toList(), ImmutableSet::copyOf));
+    return steps.stream().flatMap(step -> step.annotations().stream()).collect(toImmutableSet());
   }
 
   @Override
@@ -287,10 +286,7 @@ public abstract class BasicAnnotationProcessor extends AbstractProcessor {
 
     // Look at the elements we've found and the new elements from this round and validate them.
     for (TypeElement annotationType : getSupportedAnnotationTypeElements()) {
-      Set<? extends Element> roundElements =
-          (annotationType == null)
-              ? ImmutableSet.of()
-              : roundEnv.getElementsAnnotatedWith(annotationType);
+      Set<? extends Element> roundElements = roundEnv.getElementsAnnotatedWith(annotationType);
       ImmutableSet<Element> prevRoundElements = deferredElementsByAnnotation.get(annotationType);
       for (Element element : Sets.union(roundElements, prevRoundElements)) {
         ElementName elementName = ElementName.forAnnotatedElement(element);
@@ -353,22 +349,20 @@ public abstract class BasicAnnotationProcessor extends AbstractProcessor {
     }
 
     // element.getEnclosedElements() does NOT return parameter elements
-    if (element instanceof ExecutableElement) {
-      for (Element parameterElement : asExecutable(element).getParameters()) {
-        findAnnotatedElements(parameterElement, annotationTypes, annotatedElements);
-      }
+    switch (element.getKind()) {
+      case METHOD:
+      case CONSTRUCTOR:
+        for (Element parameterElement : asExecutable(element).getParameters()) {
+          findAnnotatedElements(parameterElement, annotationTypes, annotatedElements);
+        }
+        break;
+      default: // do nothing
     }
     for (TypeElement annotationType : annotationTypes) {
       if (isAnnotationPresent(element, annotationType)) {
         annotatedElements.put(annotationType, element);
       }
     }
-  }
-
-  private static boolean isAnnotationPresent(Element element, TypeElement annotationType) {
-    return element.getAnnotationMirrors().stream()
-        .anyMatch(
-            mirror -> MoreTypes.asTypeElement(mirror.getAnnotationType()).equals(annotationType));
   }
 
   /**
@@ -478,10 +472,9 @@ public abstract class BasicAnnotationProcessor extends AbstractProcessor {
       this.annotationsByName =
           processingStep.annotations().stream()
               .collect(
-                  collectingAndThen(
-                      toMap(
-                          Class::getCanonicalName, (Class<? extends Annotation> aClass) -> aClass),
-                      ImmutableMap::copyOf));
+                  toImmutableMap(
+                      c -> requireNonNull(c.getCanonicalName()),
+                      (Class<? extends Annotation> aClass) -> aClass));
     }
 
     @Override
@@ -502,8 +495,12 @@ public abstract class BasicAnnotationProcessor extends AbstractProcessor {
       elements
           .asMap()
           .forEach(
-              (annotation, annotatedElements) ->
-                  builder.putAll(annotationsByName.get(annotation), annotatedElements));
+              (annotationName, annotatedElements) -> {
+                Class<? extends Annotation> annotation = annotationsByName.get(annotationName);
+                if (annotation != null) { // should not be null
+                  builder.putAll(annotation, annotatedElements);
+                }
+              });
       return builder.build();
     }
   }
@@ -537,6 +534,9 @@ public abstract class BasicAnnotationProcessor extends AbstractProcessor {
      * An {@link ElementName} for an annotated element. If {@code element} is a package, uses the
      * fully qualified name of the package. If it's a type, uses its fully qualified name.
      * Otherwise, uses the fully-qualified name of the nearest enclosing type.
+     *
+     * <p>A package can be annotated if it has a {@code package-info.java} with annotations on the
+     * package declaration.
      */
     static ElementName forAnnotatedElement(Element element) {
       return element.getKind() == PACKAGE
@@ -550,18 +550,18 @@ public abstract class BasicAnnotationProcessor extends AbstractProcessor {
     }
 
     /**
-     * The {@link Element} whose fully-qualified name is {@link #name()}. Absent if the relevant
+     * The {@link Element} whose fully-qualified name is {@link #name()}. Empty if the relevant
      * method on {@link Elements} returns {@code null}.
      */
     Optional<? extends Element> getElement(Elements elements) {
-      return Optional.fromNullable(
+      return Optional.ofNullable(
           kind == Kind.PACKAGE_NAME
               ? elements.getPackageElement(name)
               : elements.getTypeElement(name));
     }
 
     @Override
-    public boolean equals(Object object) {
+    public boolean equals(@Nullable Object object) {
       if (!(object instanceof ElementName)) {
         return false;
       }

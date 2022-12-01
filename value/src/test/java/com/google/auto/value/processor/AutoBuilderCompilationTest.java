@@ -19,6 +19,8 @@ import static com.google.common.base.StandardSystemProperty.JAVA_SPECIFICATION_V
 import static com.google.common.truth.TruthJUnit.assume;
 import static com.google.testing.compile.CompilationSubject.assertThat;
 import static com.google.testing.compile.Compiler.javac;
+import static java.util.Arrays.stream;
+import static java.util.stream.Collectors.joining;
 
 import com.google.testing.compile.Compilation;
 import com.google.testing.compile.JavaFileObjects;
@@ -34,17 +36,27 @@ public final class AutoBuilderCompilationTest {
           "foo.bar.AutoBuilder_Baz_Builder",
           "package foo.bar;",
           "",
-          GeneratedImport.importGeneratedAnnotationType(),
+          sorted(
+              GeneratedImport.importGeneratedAnnotationType(),
+              "import org.checkerframework.checker.nullness.qual.Nullable;"),
           "",
           "@Generated(\"" + AutoBuilderProcessor.class.getName() + "\")",
           "class AutoBuilder_Baz_Builder implements Baz.Builder {",
-          "  private Integer anInt;",
-          "  private String aString;",
+          "  private int anInt;",
+          "  private @Nullable String aString;",
+          "  private byte set$0;",
           "",
           "  AutoBuilder_Baz_Builder() {}",
           "",
+          "  AutoBuilder_Baz_Builder(Baz source) {",
+          "    this.anInt = source.anInt();",
+          "    this.aString = source.aString();",
+          "    set$0 = (byte) 1;",
+          "  }",
+          "",
           "  @Override public Baz.Builder setAnInt(int anInt) {",
           "    this.anInt = anInt;",
+          "    set$0 |= (byte) 0x1;",
           "    return this;",
           "  }",
           "",
@@ -58,14 +70,15 @@ public final class AutoBuilderCompilationTest {
           "",
           "  @Override",
           "  public Baz build() {",
-          "    String missing = \"\";",
-          "    if (this.anInt == null) {",
-          "      missing += \" anInt\";",
-          "    }",
-          "    if (this.aString == null) {",
-          "      missing += \" aString\";",
-          "    }",
-          "    if (!missing.isEmpty()) {",
+          "    if (set$0 != 0x1",
+          "          || this.aString == null) {",
+          "      StringBuilder missing = new StringBuilder();",
+          "      if ((set$0 & 0x1) == 0) {",
+          "        missing.append(\" anInt\");",
+          "      }",
+          "      if (this.aString == null) {",
+          "        missing.append(\" aString\");",
+          "      }",
           "      throw new IllegalStateException(\"Missing required properties:\" + missing);",
           "    }",
           "    return new Baz(",
@@ -114,7 +127,7 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
+            .withOptions("-A" + Nullables.NULLABLE_OPTION + "=org.checkerframework.checker.nullness.qual.Nullable")
             .compile(javaFileObject);
     assertThat(compilation)
         .generatedSourceFile("foo.bar.AutoBuilder_Baz_Builder")
@@ -147,11 +160,52 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation)
         .generatedSourceFile("foo.bar.AutoBuilder_Baz_Builder")
         .hasSourceEquivalentTo(EXPECTED_SIMPLE_OUTPUT);
+  }
+
+  @Test
+  public void buildOtherPackage() {
+    JavaFileObject built =
+        JavaFileObjects.forSourceLines(
+            "com.example.Built",
+            "package com.example;",
+            "",
+            "public class Built {",
+            "  private final int anInt;",
+            "  private final String aString;",
+            "",
+            "  public Built(int anInt, String aString) {",
+            "    this.anInt = anInt;",
+            "    this.aString = aString;",
+            "  }",
+            "}");
+    JavaFileObject builder =
+        JavaFileObjects.forSourceLines(
+            "foo.bar.Builder",
+            "package foo.bar;",
+            "",
+            "import com.example.Built;",
+            "import com.google.auto.value.AutoBuilder;",
+            "",
+            "@AutoBuilder(ofClass = Built.class)",
+            "public interface Builder {",
+            "  public static Builder builder() {",
+            "    return new AutoBuilder_Builder();",
+            "  }",
+            "",
+            "  Builder setAnInt(int x);",
+            "  Builder setAString(String x);",
+            "  Built build();",
+            "}");
+    Compilation compilation =
+        javac()
+            .withProcessors(new AutoBuilderProcessor())
+            .compile(built, builder);
+    assertThat(compilation).succeededWithoutWarnings();
+    assertThat(compilation).generatedSourceFile("foo.bar.AutoBuilder_Builder");
   }
 
   @Test
@@ -170,7 +224,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -198,11 +251,117 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
         .hadErrorContaining("[AutoBuilderPrivate] @AutoBuilder class must not be private")
+        .inFile(javaFileObject)
+        .onLineContaining("interface Builder");
+  }
+
+  @Test
+  public void autoBuilderClassMustHaveNoArgConstructor() {
+    JavaFileObject javaFileObject =
+        JavaFileObjects.forSourceLines(
+            "foo.bar.Baz",
+            "package foo.bar;",
+            "",
+            "import com.google.auto.value.AutoBuilder;",
+            "",
+            "public class Baz {",
+            "  @AutoBuilder",
+            "  abstract static class Builder {",
+            "    Builder(int bogus) {}",
+            "    Baz build();",
+            "  }",
+            "}");
+    Compilation compilation =
+        javac()
+            .withProcessors(new AutoBuilderProcessor())
+            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
+            .compile(javaFileObject);
+    assertThat(compilation).failed();
+    assertThat(compilation)
+        .hadErrorContaining(
+            "[AutoBuilderConstructor] @AutoBuilder class must have a non-private no-arg"
+                + " constructor")
+        .inFile(javaFileObject)
+        .onLineContaining("class Builder");
+  }
+
+  @Test
+  public void autoBuilderClassMustHaveVisibleNoArgConstructor() {
+    JavaFileObject javaFileObject =
+        JavaFileObjects.forSourceLines(
+            "foo.bar.Baz",
+            "package foo.bar;",
+            "",
+            "import com.google.auto.value.AutoBuilder;",
+            "",
+            "public class Baz {",
+            "  @AutoBuilder",
+            "  abstract static class Builder {",
+            "    private Builder() {}",
+            "    Baz build();",
+            "  }",
+            "}");
+    Compilation compilation =
+        javac()
+            .withProcessors(new AutoBuilderProcessor())
+            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
+            .compile(javaFileObject);
+    assertThat(compilation).failed();
+    assertThat(compilation)
+        .hadErrorContaining(
+            "[AutoBuilderConstructor] @AutoBuilder class must have a non-private no-arg"
+                + " constructor")
+        .inFile(javaFileObject)
+        .onLineContaining("class Builder");
+  }
+
+  @Test
+  public void autoBuilderMissingBuildMethod() {
+    JavaFileObject javaFileObject =
+        JavaFileObjects.forSourceLines(
+            "foo.bar.Baz",
+            "package foo.bar;",
+            "",
+            "import com.google.auto.value.AutoBuilder;",
+            "",
+            "public class Baz {",
+            "  private final int anInt;",
+            "  private final String aString;",
+            "",
+            "  public Baz(int anInt, String aString) {",
+            "    this.anInt = anInt;",
+            "    this.aString = aString;",
+            "  }",
+            "",
+            "  public int anInt() {",
+            "    return anInt;",
+            "  }",
+            "",
+            "  public String aString() {",
+            "    return aString;",
+            "  }",
+            "",
+            "  public static Builder builder() {",
+            "    return new AutoBuilder_Baz_Builder();",
+            "  }",
+            "",
+            "  @AutoBuilder",
+            "  public interface Builder {",
+            "    Builder setAnInt(int x);",
+            "    Builder setAString(String x);",
+            "  }",
+            "}");
+    Compilation compilation =
+        javac().withProcessors(new AutoBuilderProcessor()).compile(javaFileObject);
+    assertThat(compilation).failed();
+    assertThat(compilation)
+        .hadErrorContaining(
+            "[AutoValueBuilderBuild] Builder must have a single no-argument method, typically"
+                + " called build(), that returns foo.bar.Baz")
         .inFile(javaFileObject)
         .onLineContaining("interface Builder");
   }
@@ -227,7 +386,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -255,7 +413,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -284,7 +441,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -311,7 +467,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -342,7 +497,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -374,7 +528,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -407,7 +560,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -445,7 +597,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -475,7 +626,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -509,7 +659,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -540,7 +689,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -574,7 +722,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -606,7 +753,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -642,13 +788,12 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
         .hadErrorContaining(
-            "[AutoBuilderBuilderWhatProp] Method does not correspond to a parameter of Baz(int one,"
-                + " int two)")
+            "[AutoBuilderBuilderWhatProp] Method three does not correspond to "
+                + "a parameter of Baz(int one, int two)")
         .inFile(javaFileObject)
         .onLineContaining("three(int x)");
   }
@@ -675,12 +820,11 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
         .hadErrorContaining(
-            "[AutoBuilderBuilderRet] Setter methods must return foo.bar.Baz.Builder")
+            "[AutoBuilderBuilderRet] Setter methods must return foo.bar.Baz.Builder or a supertype")
         .inFile(javaFileObject)
         .onLineContaining("two(int x)");
   }
@@ -693,7 +837,7 @@ public final class AutoBuilderCompilationTest {
             "package foo.bar;",
             "",
             "import com.google.auto.value.AutoBuilder;",
-            "import org.jspecify.nullness.Nullable;",
+            "import org.checkerframework.checker.nullness.qual.Nullable;",
             "",
             "class Baz {",
             "  Baz(String thing) {}",
@@ -706,7 +850,7 @@ public final class AutoBuilderCompilationTest {
             "}");
     JavaFileObject nullableFileObject =
         JavaFileObjects.forSourceLines(
-            "org.jspecify.nullness.Nullable",
+            "org.checkerframework.checker.nullness.qual.Nullable",
             "package org.jspecify.nullness;",
             "",
             "import java.lang.annotation.ElementType;",
@@ -717,7 +861,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject, nullableFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -750,7 +893,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -783,7 +925,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -818,7 +959,6 @@ public final class AutoBuilderCompilationTest {
     Compilation compilation =
         javac()
             .withProcessors(new AutoBuilderProcessor())
-            .withOptions("-Acom.google.auto.value.AutoBuilderIsUnstable")
             .compile(javaFileObject);
     assertThat(compilation).failed();
     assertThat(compilation)
@@ -827,5 +967,40 @@ public final class AutoBuilderCompilationTest {
                 + " Baz(T param)")
         .inFile(javaFileObject)
         .onLineContaining("interface Builder<E>");
+  }
+
+  @Test
+  public void annotationWithCallMethod() {
+    JavaFileObject javaFileObject =
+        JavaFileObjects.forSourceLines(
+            "foo.bar.Baz",
+            "package foo.bar;",
+            "",
+            "import com.google.auto.value.AutoBuilder;",
+            "",
+            "class Baz {",
+            "  @interface MyAnnot {",
+            "    boolean broken();",
+            "  }",
+            "",
+            "  @AutoBuilder(callMethod = \"annotationType\", ofClass = MyAnnot.class)",
+            "  interface Builder {",
+            "    abstract Builder broken(boolean x);",
+            "    abstract MyAnnot build();",
+            "  }",
+            "}");
+    Compilation compilation =
+        javac().withProcessors(new AutoBuilderProcessor()).compile(javaFileObject);
+    assertThat(compilation).failed();
+    assertThat(compilation)
+        .hadErrorContaining(
+            "[AutoBuilderAnnotationMethod] @AutoBuilder for an annotation must have an empty"
+                + " callMethod, not \"annotationType\"")
+        .inFile(javaFileObject)
+        .onLineContaining("interface Builder");
+  }
+
+  private static String sorted(String... imports) {
+    return stream(imports).sorted().collect(joining("\n"));
   }
 }

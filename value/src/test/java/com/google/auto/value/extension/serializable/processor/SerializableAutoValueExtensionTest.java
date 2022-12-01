@@ -20,6 +20,7 @@ import static com.google.common.truth.Truth8.assertThat;
 import static org.junit.Assert.assertThrows;
 
 import com.google.auto.value.AutoValue;
+import com.google.auto.value.extension.memoized.Memoized;
 import com.google.auto.value.extension.serializable.SerializableAutoValue;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -414,5 +415,83 @@ public final class SerializableAutoValueExtensionTest {
     MultiplePropertiesSameType actualAutoValue = SerializableTester.reserialize(autoValue);
 
     assertThat(actualAutoValue).isEqualTo(autoValue);
+  }
+
+  /**
+   * Type that may result in nested lambdas in the generated code. Including this allows us to
+   * verify that we handle those correctly, in particular not reusing a lambda parameter name in
+   * another lambda nested inside the first one.
+   */
+  @SerializableAutoValue
+  @AutoValue
+  abstract static class ComplexType implements Serializable {
+    abstract ImmutableMap<String, ImmutableMap<String, Optional<String>>> a();
+
+    static ComplexType.Builder builder() {
+      return new AutoValue_SerializableAutoValueExtensionTest_ComplexType.Builder();
+    }
+
+    @AutoValue.Builder
+    abstract static class Builder {
+      abstract ComplexType.Builder setA(
+          ImmutableMap<String, ImmutableMap<String, Optional<String>>> a);
+
+      abstract ComplexType build();
+    }
+  }
+
+  @Test
+  public void complexType() {
+    ImmutableMap<String, ImmutableMap<String, Optional<String>>> map =
+        ImmutableMap.of("foo", ImmutableMap.of("bar", Optional.of("baz")));
+    ComplexType complexType = ComplexType.builder().setA(map).build();
+
+    ComplexType reserialized = SerializableTester.reserialize(complexType);
+
+    assertThat(reserialized).isEqualTo(complexType);
+  }
+
+  /**
+   * Type that uses both {@code @SerializableAutoValue} and {@code @Memoized}, showing that the two
+   * extensions work correctly together.
+   */
+  @SerializableAutoValue
+  @AutoValue
+  abstract static class SerializeMemoize implements Serializable {
+    abstract Optional<Integer> number();
+    private transient int methodCount;
+
+    @Memoized
+    Optional<Integer> negate() {
+      methodCount++;
+      return number().map(n -> -n);
+    }
+
+    static SerializeMemoize.Builder builder() {
+      return new AutoValue_SerializableAutoValueExtensionTest_SerializeMemoize.Builder();
+    }
+
+    @AutoValue.Builder
+    abstract static class Builder {
+      abstract Builder setNumber(Optional<Integer> number);
+      abstract SerializeMemoize build();
+    }
+  }
+
+  @Test
+  public void serializeMemoize() {
+    SerializeMemoize instance1 = SerializeMemoize.builder().setNumber(Optional.of(17)).build();
+    assertThat(instance1.methodCount).isEqualTo(0);
+    assertThat(instance1.negate()).hasValue(-17);
+    assertThat(instance1.methodCount).isEqualTo(1);
+    assertThat(instance1.negate()).hasValue(-17);
+    assertThat(instance1.methodCount).isEqualTo(1);
+    SerializeMemoize instance2 = SerializableTester.reserialize(instance1);
+    assertThat(instance2.methodCount).isEqualTo(0);
+    assertThat(instance2.negate()).hasValue(-17);
+    assertThat(instance2.methodCount).isEqualTo(1);
+    assertThat(instance2.negate()).hasValue(-17);
+    assertThat(instance2.methodCount).isEqualTo(1);
+
   }
 }

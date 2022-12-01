@@ -25,7 +25,6 @@ import static javax.lang.model.type.TypeKind.TYPEVAR;
 import static javax.lang.model.type.TypeKind.WILDCARD;
 
 import com.google.common.base.Equivalence;
-import com.google.common.base.Objects;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -55,6 +54,7 @@ import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.SimpleTypeVisitor8;
 import javax.lang.model.util.Types;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
  * Utilities related to {@link TypeMirror} instances.
@@ -140,25 +140,45 @@ public final class MoreTypes {
     }
 
     @Override
-    public boolean equals(Object o) {
-      if (o instanceof ComparedElements) {
-        ComparedElements that = (ComparedElements) o;
-        int nArguments = aArguments.size();
-        if (!this.a.equals(that.a)
-            || !this.b.equals(that.b)
-            || nArguments != bArguments.size()) {
-          // The arguments must be the same size, but we check anyway.
-          return false;
-        }
-        for (int i = 0; i < nArguments; i++) {
-          if (aArguments.get(i) != bArguments.get(i)) {
-            return false;
-          }
-        }
-        return true;
-      } else {
+    public boolean equals(@Nullable Object o) {
+      if (!(o instanceof ComparedElements)) {
         return false;
       }
+      ComparedElements that = (ComparedElements) o;
+
+      int nArguments = this.aArguments.size();
+      if (nArguments != that.aArguments.size()) {
+        return false;
+      }
+      // The arguments must be the same size, but we check anyway.
+      if (nArguments != this.bArguments.size() || nArguments != that.bArguments.size()) {
+        return false;
+      }
+
+      if (!this.a.equals(that.a) || !this.b.equals(that.b)) {
+        return false;
+      }
+
+      /*
+       * The purpose here is just to avoid the infinite recursion that we would otherwise have
+       * if Enum<E extends Enum<E>> is compared against itself, for example. If we are able to
+       * see that the inner Enum<E> is the same object as the outer one then we don't need a
+       * recursive call to compare the "a" Enum<E> against the "b" Enum<E>. The same-object check
+       * may not be completely justified, but it relies on the practical assumption that the
+       * compiler is not going to conjure up an infinite regress of objects to represent this
+       * recursive type. Other comparison methods like comparing their toString() are expensive
+       * and not warranted.
+       */
+      for (int i = 0; i < nArguments; i++) {
+        if (this.aArguments.get(i) != that.aArguments.get(i)) {
+          return false;
+        }
+        if (this.bArguments.get(i) != that.bArguments.get(i)) {
+          return false;
+        }
+      }
+
+      return true;
     }
 
     @Override
@@ -299,7 +319,14 @@ public final class MoreTypes {
   }
 
   @SuppressWarnings("TypeEquals")
-  private static boolean equal(TypeMirror a, TypeMirror b, Set<ComparedElements> visiting) {
+  private static boolean equal(
+      @Nullable TypeMirror a, @Nullable TypeMirror b, Set<ComparedElements> visiting) {
+    if (a == b) {
+      return true;
+    }
+    if (a == null || b == null) {
+      return false;
+    }
     // TypeMirror.equals is not guaranteed to return true for types that are equal, but we can
     // assume that if it does return true then the types are equal. This check also avoids getting
     // stuck in infinite recursion when Eclipse decrees that the upper bound of the second K in
@@ -307,13 +334,15 @@ public final class MoreTypes {
     // The javac implementation of ExecutableType, at least in some versions, does not take thrown
     // exceptions into account in its equals implementation, so avoid this optimization for
     // ExecutableType.
-    if (Objects.equal(a, b) && !(a instanceof ExecutableType)) {
+    @SuppressWarnings("TypesEquals")
+    boolean equal = a.equals(b);
+    if (equal && a.getKind() != TypeKind.EXECUTABLE) {
       return true;
     }
     EqualVisitorParam p = new EqualVisitorParam();
     p.type = b;
     p.visiting = visiting;
-    return (a == b) || (a != null && b != null && a.accept(EqualVisitor.INSTANCE, p));
+    return a.accept(EqualVisitor.INSTANCE, p);
   }
 
   /**
@@ -323,7 +352,7 @@ public final class MoreTypes {
    * <a href="https://bugs.eclipse.org/bugs/show_bug.cgi?id=508222">this bug</a> whereby
    * the Eclipse compiler returns a value for static classes that is not NoType.
    */
-  private static TypeMirror enclosingType(DeclaredType t) {
+  private static @Nullable TypeMirror enclosingType(DeclaredType t) {
     TypeMirror enclosing = t.getEnclosingType();
     if (enclosing.getKind().equals(TypeKind.NONE)
         || t.asElement().getModifiers().contains(Modifier.STATIC)) {
@@ -436,7 +465,7 @@ public final class MoreTypes {
     public Integer visitUnknown(TypeMirror t, Set<Element> visiting) {
       throw new UnsupportedOperationException();
     }
-  };
+  }
 
   private static int hashList(List<? extends TypeMirror> mirrors, Set<Element> visiting) {
     int result = HASH_SEED;
@@ -463,17 +492,17 @@ public final class MoreTypes {
   }
 
   private static final class ReferencedTypes
-      extends SimpleTypeVisitor8<Void, ImmutableSet.Builder<TypeElement>> {
+      extends SimpleTypeVisitor8<@Nullable Void, ImmutableSet.Builder<TypeElement>> {
     private static final ReferencedTypes INSTANCE = new ReferencedTypes();
 
     @Override
-    public Void visitArray(ArrayType t, ImmutableSet.Builder<TypeElement> p) {
+    public @Nullable Void visitArray(ArrayType t, ImmutableSet.Builder<TypeElement> p) {
       t.getComponentType().accept(this, p);
       return null;
     }
 
     @Override
-    public Void visitDeclared(DeclaredType t, ImmutableSet.Builder<TypeElement> p) {
+    public @Nullable Void visitDeclared(DeclaredType t, ImmutableSet.Builder<TypeElement> p) {
       p.add(MoreElements.asType(t.asElement()));
       for (TypeMirror typeArgument : t.getTypeArguments()) {
         typeArgument.accept(this, p);
@@ -482,14 +511,14 @@ public final class MoreTypes {
     }
 
     @Override
-    public Void visitTypeVariable(TypeVariable t, ImmutableSet.Builder<TypeElement> p) {
+    public @Nullable Void visitTypeVariable(TypeVariable t, ImmutableSet.Builder<TypeElement> p) {
       t.getLowerBound().accept(this, p);
       t.getUpperBound().accept(this, p);
       return null;
     }
 
     @Override
-    public Void visitWildcard(WildcardType t, ImmutableSet.Builder<TypeElement> p) {
+    public @Nullable Void visitWildcard(WildcardType t, ImmutableSet.Builder<TypeElement> p) {
       TypeMirror extendsBound = t.getExtendsBound();
       if (extendsBound != null) {
         extendsBound.accept(this, p);
@@ -537,7 +566,8 @@ public final class MoreTypes {
     public Element visitTypeVariable(TypeVariable t, Void p) {
       return t.asElement();
     }
-  };
+  }
+  ;
 
   // TODO(gak): consider removing these two methods as they're pretty trivial now
   public static TypeElement asTypeElement(TypeMirror mirror) {
@@ -882,10 +912,10 @@ public final class MoreTypes {
    * is {@link Object}.
    */
   // TODO(bcorso): Remove unused parameter Elements?
-  public static Optional<DeclaredType> nonObjectSuperclass(Types types, Elements elements,
-      DeclaredType type) {
+  public static Optional<DeclaredType> nonObjectSuperclass(
+      Types types, Elements elements, DeclaredType type) {
     checkNotNull(types);
-    checkNotNull(elements);  // This is no longer used, but here to avoid changing the API.
+    checkNotNull(elements); // This is no longer used, but here to avoid changing the API.
     checkNotNull(type);
 
     TypeMirror superclassType = asTypeElement(type).getSuperclass();
@@ -893,7 +923,7 @@ public final class MoreTypes {
       return Optional.absent();
     }
 
-    DeclaredType superclass =  asDeclared(superclassType);
+    DeclaredType superclass = asDeclared(superclassType);
     if (isObjectType(superclass)) {
       return Optional.absent();
     }
@@ -920,8 +950,8 @@ public final class MoreTypes {
    * {@code container} of type {@code Set<String>}, and a variable corresponding to the {@code E e}
    * parameter in the {@code Set.add(E e)} method, this will return a TypeMirror for {@code String}.
    */
-  public static TypeMirror asMemberOf(Types types, DeclaredType container,
-      VariableElement variable) {
+  public static TypeMirror asMemberOf(
+      Types types, DeclaredType container, VariableElement variable) {
     if (variable.getKind().equals(ElementKind.PARAMETER)) {
       ExecutableElement methodOrConstructor =
           MoreElements.asExecutable(variable.getEnclosingElement());
@@ -1013,7 +1043,7 @@ public final class MoreTypes {
       }
       return true;
     }
-    
+
     private static boolean isJavaLangObject(TypeMirror type) {
       if (type.getKind() != TypeKind.DECLARED) {
         return false;

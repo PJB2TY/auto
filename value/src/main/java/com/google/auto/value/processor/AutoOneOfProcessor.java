@@ -60,7 +60,7 @@ import net.ltgt.gradle.incap.IncrementalAnnotationProcessorType;
 @IncrementalAnnotationProcessor(IncrementalAnnotationProcessorType.ISOLATING)
 public class AutoOneOfProcessor extends AutoValueishProcessor {
   public AutoOneOfProcessor() {
-    super(AUTO_ONE_OF_NAME);
+    super(AUTO_ONE_OF_NAME, /* appliesToInterfaces= */ false);
   }
 
   @Override
@@ -69,14 +69,12 @@ public class AutoOneOfProcessor extends AutoValueishProcessor {
   }
 
   @Override
+  public ImmutableSet<String> getSupportedOptions() {
+    return ImmutableSet.of(Nullables.NULLABLE_OPTION);
+  }
+
+  @Override
   void processType(TypeElement autoOneOfType) {
-    if (autoOneOfType.getKind() != ElementKind.CLASS) {
-      errorReporter()
-          .abortWithError(
-              autoOneOfType,
-              "[AutoOneOfNotClass] @" + AUTO_ONE_OF_NAME + " only applies to classes");
-    }
-    checkModifiersIfNested(autoOneOfType);
     DeclaredType kindMirror = mirrorForKindType(autoOneOfType);
 
     // We are going to classify the methods of the @AutoOneOf class into several categories.
@@ -113,8 +111,9 @@ public class AutoOneOfProcessor extends AutoValueishProcessor {
     AutoOneOfTemplateVars vars = new AutoOneOfTemplateVars();
     vars.generatedClass = TypeSimplifier.simpleNameOf(subclass);
     vars.propertyToKind = propertyToKind;
-    defineSharedVarsForType(autoOneOfType, methods, vars);
-    defineVarsForType(autoOneOfType, vars, propertyMethodsAndTypes, kindGetter);
+    Nullables nullables = Nullables.fromMethods(processingEnv, methods);
+    defineSharedVarsForType(autoOneOfType, methods, nullables, vars);
+    defineVarsForType(autoOneOfType, vars, propertyMethodsAndTypes, kindGetter, nullables);
 
     String text = vars.toText();
     text = TypeEncoder.decode(text, processingEnv, vars.pkg, autoOneOfType.asType());
@@ -124,10 +123,8 @@ public class AutoOneOfProcessor extends AutoValueishProcessor {
 
   private DeclaredType mirrorForKindType(TypeElement autoOneOfType) {
     // The annotation is guaranteed to be present by the contract of Processor#process
-    AnnotationMirror oneOfAnnotation =
-        getAnnotationMirror(autoOneOfType, AUTO_ONE_OF_NAME).get();
-    AnnotationValue kindValue =
-        AnnotationMirrors.getAnnotationValue(oneOfAnnotation, "value");
+    AnnotationMirror oneOfAnnotation = getAnnotationMirror(autoOneOfType, AUTO_ONE_OF_NAME).get();
+    AnnotationValue kindValue = AnnotationMirrors.getAnnotationValue(oneOfAnnotation, "value");
     Object value = kindValue.getValue();
     if (value instanceof TypeMirror) {
       TypeMirror kindType = (TypeMirror) value;
@@ -154,9 +151,7 @@ public class AutoOneOfProcessor extends AutoValueishProcessor {
     Map<String, String> transformedPropertyNames =
         propertyNames.stream().collect(toMap(this::transformName, s -> s));
     Map<String, Element> transformedEnumConstants =
-        kindElement
-            .getEnclosedElements()
-            .stream()
+        kindElement.getEnclosedElements().stream()
             .filter(e -> e.getKind().equals(ElementKind.ENUM_CONSTANT))
             .collect(toMap(e -> transformName(e.getSimpleName().toString()), e -> e));
 
@@ -207,8 +202,7 @@ public class AutoOneOfProcessor extends AutoValueishProcessor {
       TypeMirror kindMirror,
       ImmutableSet<ExecutableElement> abstractMethods) {
     Set<ExecutableElement> kindGetters =
-        abstractMethods
-            .stream()
+        abstractMethods.stream()
             .filter(e -> sameType(kindMirror, e.getReturnType()))
             .filter(e -> e.getParameters().isEmpty())
             .collect(toSet());
@@ -264,15 +258,20 @@ public class AutoOneOfProcessor extends AutoValueishProcessor {
       TypeElement type,
       AutoOneOfTemplateVars vars,
       ImmutableMap<ExecutableElement, TypeMirror> propertyMethodsAndTypes,
-      ExecutableElement kindGetter) {
-    vars.props = propertySet(
-        propertyMethodsAndTypes, ImmutableListMultimap.of(), ImmutableListMultimap.of());
+      ExecutableElement kindGetter,
+      Nullables nullables) {
+    vars.props =
+        propertySet(
+            propertyMethodsAndTypes,
+            /* annotatedPropertyFields= */ ImmutableListMultimap.of(),
+            /* annotatedPropertyMethods= */ ImmutableListMultimap.of(),
+            nullables);
     vars.kindGetter = kindGetter.getSimpleName().toString();
     vars.kindType = TypeEncoder.encode(kindGetter.getReturnType());
     TypeElement javaIoSerializable = elementUtils().getTypeElement("java.io.Serializable");
     vars.serializable =
-        javaIoSerializable != null  // just in case
-        && typeUtils().isAssignable(type.asType(), javaIoSerializable.asType());
+        javaIoSerializable != null // just in case
+            && typeUtils().isAssignable(type.asType(), javaIoSerializable.asType());
   }
 
   @Override

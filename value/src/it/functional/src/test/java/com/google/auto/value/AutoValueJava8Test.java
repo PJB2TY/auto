@@ -42,6 +42,7 @@ import java.lang.reflect.TypeVariable;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.function.Predicate;
 import javax.annotation.processing.AbstractProcessor;
@@ -55,6 +56,7 @@ import javax.lang.model.element.TypeElement;
 import javax.lang.model.util.ElementFilter;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
+import org.junit.AssumptionViolatedException;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -177,9 +179,7 @@ public class AutoValueJava8Test {
   public void testNullablePropertyImplementationIsNullable() throws NoSuchMethodException {
     Method method =
         AutoValue_AutoValueJava8Test_NullableProperties.class.getDeclaredMethod("nullableString");
-    assertThat(method.getAnnotatedReturnType().getAnnotations())
-        .asList()
-        .contains(nullable());
+    assertThat(method.getAnnotatedReturnType().getAnnotations()).asList().contains(nullable());
   }
 
   @Test
@@ -213,8 +213,9 @@ public class AutoValueJava8Test {
 
   @Test
   public void testExcludedNullablePropertyImplementation() throws NoSuchMethodException {
-    Method method = AutoValue_AutoValueJava8Test_NullablePropertiesNotCopied.class
-        .getDeclaredMethod("nullableString");
+    Method method =
+        AutoValue_AutoValueJava8Test_NullablePropertiesNotCopied.class.getDeclaredMethod(
+            "nullableString");
     assertThat(method.getAnnotatedReturnType().getAnnotations())
         .asList()
         .doesNotContain(nullable());
@@ -411,6 +412,8 @@ public class AutoValueJava8Test {
 
       Builder nullable(@Nullable String s);
 
+      Optional<String> nullable();
+
       NullablePropertyWithBuilder build();
     }
   }
@@ -437,6 +440,9 @@ public class AutoValueJava8Test {
         assertThrows(
             IllegalStateException.class, () -> NullablePropertyWithBuilder.builder().build());
     assertThat(e).hasMessageThat().contains("notNullable");
+
+    NullablePropertyWithBuilder.Builder builder = NullablePropertyWithBuilder.builder();
+    assertThat(builder.nullable()).isEmpty();
   }
 
   @AutoValue
@@ -496,6 +502,8 @@ public class AutoValueJava8Test {
     public interface Builder {
       Builder optional(@Nullable String s);
 
+      Optional<String> optional();
+
       NullableOptionalPropertyWithNullableBuilder build();
     }
   }
@@ -513,6 +521,10 @@ public class AutoValueJava8Test {
     NullableOptionalPropertyWithNullableBuilder instance3 =
         NullableOptionalPropertyWithNullableBuilder.builder().optional("haruspex").build();
     assertThat(instance3.optional()).hasValue("haruspex");
+
+    NullableOptionalPropertyWithNullableBuilder.Builder builder =
+        NullableOptionalPropertyWithNullableBuilder.builder();
+    assertThat(builder.optional()).isNull();
   }
 
   @AutoValue
@@ -549,6 +561,35 @@ public class AutoValueJava8Test {
 
       BuilderWithUnprefixedGetters<T> build();
     }
+  }
+
+  @AutoValue
+  abstract static class NoNullableRef {
+    abstract String foo();
+
+    static NoNullableRef of(String foo) {
+      return new AutoValue_AutoValueJava8Test_NoNullableRef(foo);
+    }
+  }
+
+  // Tests that we generate equals(@Nullable x) using JSpecify @Nullable if that annotation is
+  // available and there is no other @Nullable type annotation mentioned in the @AutoValue class.
+  // If there *are* other @Nullable type annotations, other test methods here will check that they
+  // are used instead.
+  @Test
+  public void testDefaultToJSpecifyNullable() throws ReflectiveOperationException {
+    Class<? extends Annotation> jspecifyNullable;
+    try {
+      // We write this using .concat in order to hide it from rewriting rules.
+      jspecifyNullable =
+          Class.forName("org".concat(".jspecify.nullness.Nullable")).asSubclass(Annotation.class);
+    } catch (ClassNotFoundException e) {
+      throw new AssumptionViolatedException("No JSpecify @Nullable available", e);
+    }
+    Class<? extends NoNullableRef> autoValueImpl = NoNullableRef.of("foo").getClass();
+    Method equals = autoValueImpl.getDeclaredMethod("equals", Object.class);
+    assertThat(equals.getAnnotatedParameterTypes()[0].isAnnotationPresent(jspecifyNullable))
+        .isTrue();
   }
 
   @Test
@@ -776,6 +817,7 @@ public class AutoValueJava8Test {
     @AutoValue.Builder
     abstract static class Builder {
       abstract Builder maybeJustMaybe(Optional<String> maybe);
+
       abstract OptionalOptional build();
     }
   }
@@ -810,6 +852,7 @@ public class AutoValueJava8Test {
     @AutoValue.Builder
     abstract static class Builder {
       abstract Builder setPredicate(Predicate<? super Integer> predicate);
+
       abstract OptionalExtends build();
     }
   }
@@ -819,5 +862,64 @@ public class AutoValueJava8Test {
     Predicate<Number> predicate = n -> n.toString().equals("0");
     OptionalExtends t = OptionalExtends.builder().setPredicate(predicate).build();
     assertThat(t.predicate()).hasValue(predicate);
+  }
+
+  @AutoValue
+  public abstract static class Foo {
+    public abstract Bar bar();
+
+    public abstract double baz();
+
+    public static Foo.Builder builder() {
+      return new AutoValue_AutoValueJava8Test_Foo.Builder();
+    }
+
+    @AutoValue.Builder
+    public abstract static class Builder {
+      // https://github.com/google/auto/blob/master/value/userguide/builders-howto.md#normalize
+      abstract Optional<Bar> bar();
+
+      public abstract Builder bar(Bar bar);
+
+      // https://github.com/google/auto/blob/master/value/userguide/builders-howto.md#nested_builders
+      public abstract Bar.Builder barBuilder();
+
+      abstract OptionalDouble baz();
+
+      public abstract Builder baz(double baz);
+
+      abstract Foo autoBuild();
+
+      public Foo build() {
+        if (!bar().isPresent()) {
+          bar(Bar.builder().build());
+        }
+        if (!baz().isPresent()) {
+          baz(0.0);
+        }
+        return autoBuild();
+      }
+    }
+  }
+
+  @AutoValue
+  public abstract static class Bar {
+    public abstract Bar.Builder toBuilder();
+
+    public static Bar.Builder builder() {
+      return new AutoValue_AutoValueJava8Test_Bar.Builder();
+    }
+
+    @AutoValue.Builder
+    public abstract static class Builder {
+      public abstract Bar build();
+    }
+  }
+
+  @Test
+  public void nestedOptionalGetter() {
+    Foo foo = Foo.builder().build();
+    assertThat(foo.bar()).isNotNull();
+    assertThat(foo.baz()).isEqualTo(0.0);
   }
 }

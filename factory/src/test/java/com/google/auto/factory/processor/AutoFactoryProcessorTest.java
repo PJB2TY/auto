@@ -170,6 +170,7 @@ public class AutoFactoryProcessorTest {
         .generatedSourceFile("tests.ConstructorAnnotatedThrowsFactory")
         .hasSourceEquivalentTo(loadExpectedFile("expected/ConstructorAnnotatedThrowsFactory.java"));
   }
+
   @Test
   public void constructorAnnotatedNonFinal() {
     Compilation compilation =
@@ -505,6 +506,32 @@ public class AutoFactoryProcessorTest {
     assertThat(compilation)
         .generatedSourceFile("DefaultPackageFactory")
         .hasSourceEquivalentTo(loadExpectedFile("expected/DefaultPackageFactory.java"));
+  }
+
+  @Test
+  public void generics() {
+    JavaFileObject file = JavaFileObjects.forResource("good/Generics.java");
+    Compilation compilation = javac.compile(file);
+    assertThat(compilation).succeededWithoutWarnings();
+    assertThat(compilation)
+        .generatedSourceFile("tests.Generics_FooImplFactory")
+        .hasSourceEquivalentTo(loadExpectedFile("expected/Generics_FooImplFactory.java"));
+    assertThat(compilation)
+        .generatedSourceFile("tests.Generics_ExplicitFooImplFactory")
+        .hasSourceEquivalentTo(loadExpectedFile("expected/Generics_ExplicitFooImplFactory.java"));
+    assertThat(compilation)
+        .generatedSourceFile("tests.Generics_FooImplWithClassFactory")
+        .hasSourceEquivalentTo(loadExpectedFile("expected/Generics_FooImplWithClassFactory.java"));
+  }
+
+  @Test
+  public void parameterAnnotations() {
+    JavaFileObject file = JavaFileObjects.forResource("good/ParameterAnnotations.java");
+    Compilation compilation = javac.compile(file);
+    assertThat(compilation).succeededWithoutWarnings();
+    assertThat(compilation)
+        .generatedSourceFile("tests.ParameterAnnotationsFactory")
+        .hasSourceEquivalentTo(loadExpectedFile("expected/ParameterAnnotationsFactory.java"));
   }
 
   private JavaFileObject loadExpectedFile(String resourceName) {

@@ -34,6 +34,8 @@ How do I...
 *   ... [access nested builders while building?](#nested_builders)
 *   ... [create a "step builder"?](#step)
 *   ... [create a builder for something other than an `@AutoValue`?](#autobuilder)
+*   ... [use a different build method for a
+    property?](#build_method)
 
 ## <a name="beans"></a>... use (or not use) `set` prefixes?
 
@@ -154,7 +156,7 @@ public abstract class Animal {
 
   abstract Builder toBuilder();
 
-  public Animal withName(String name) {
+  public final Animal withName(String name) {
     return toBuilder().setName(name).build();
   }
 
@@ -201,7 +203,7 @@ public abstract class Animal {
 
     abstract Animal autoBuild();  // not public
 
-    public Animal build() {
+    public final Animal build() {
       Animal animal = autoBuild();
       Preconditions.checkState(animal.numberOfLegs() >= 0, "Negative legs");
       return animal;
@@ -235,7 +237,7 @@ public abstract class Animal {
 
     abstract Animal autoBuild(); // not public
 
-    public Animal build() {
+    public final Animal build() {
       setName(name().toLowerCase());
       return autoBuild();
     }
@@ -251,13 +253,13 @@ non-[nullable](howto.md#nullable) property, `IllegalStateException` is thrown.
 Getters should generally only be used within the `Builder` as shown, so they are
 not public.
 
-As an alternative to returning the same type as the property accessor method,
-the builder getter can return an Optional wrapping of that type. This can be
-used if you want to supply a default, but only if the property has not been set.
-(The [usual way](#default) of supplying defaults means that the property always
-appears to have been set.) For example, suppose you wanted the default name of
-your Animal to be something like "4-legged creature", where 4 is the
-`numberOfLegs()` property. You might write this:
+<p id="optional-getter">As an alternative to returning the same type as the
+property accessor method, the builder getter can return an Optional wrapping of
+that type. This can be used if you want to supply a default, but only if the
+property has not been set. (The [usual way](#default) of supplying defaults
+means that the property always appears to have been set.) For example, suppose
+you wanted the default name of your Animal to be something like "4-legged
+creature", where 4 is the `numberOfLegs()` property. You might write this:
 
 ```java
 @AutoValue
@@ -279,8 +281,8 @@ public abstract class Animal {
 
     abstract Animal autoBuild(); // not public
 
-    public Animal build() {
-      if (!name().isPresent()) {
+    public final Animal build() {
+      if (name().isEmpty()) {
         setName(numberOfLegs() + "-legged creature");
       }
       return autoBuild();
@@ -311,7 +313,8 @@ property of type `Optional<String>`, say, then it will default to an empty
 `Optional` without needing to [specify](#default) a default explicitly. And,
 instead of or as well as the normal `setFoo(Optional<String>)` method, you can
 have `setFoo(String)`. Then `setFoo(s)` is equivalent to
-`setFoo(Optional.of(s))`.
+`setFoo(Optional.of(s))`. (If it is `setFoo(@Nullable String)`, then `setFoo(s)`
+is equivalent to `setFoo(Optional.ofNullable(s))`.)
 
 Here, `Optional` means either [`java.util.Optional`] from Java (Java 8 or
 later), or [`com.google.common.base.Optional`] from Guava. Java 8 also
@@ -490,7 +493,7 @@ public abstract class Animal {
     public abstract Builder setNumberOfLegs(int value);
 
     abstract ImmutableSet.Builder<String> countriesBuilder();
-    public Builder addCountry(String value) {
+    public final Builder addCountry(String value) {
       countriesBuilder().add(value);
       return this;
     }
@@ -622,11 +625,75 @@ in an exception because the required properties of `Species` have not been set.
 
 A [_step builder_](http://rdafbn.blogspot.com/2012/07/step-builder-pattern_28.html)
 is a collection of builder interfaces that take you step by step through the
-setting of each of a list of required properties. We think that these are a nice
-idea in principle but not necessarily in practice. Regardless, if you want to
-use AutoValue to implement a step builder,
-[this example](https://github.com/google/auto/issues/1000#issuecomment-792875738)
-shows you how.
+setting of each of a list of required properties. This means you can be sure at
+compile time that all the properties are set before you build, at the expense of
+some extra code and a bit less flexibility.
+
+Here is an example:
+
+```java
+@AutoValue
+public abstract class Stepped {
+  public abstract String foo();
+  public abstract String bar();
+  public abstract int baz();
+
+  public static FooStep builder() {
+    return new AutoValue_Stepped.Builder();
+  }
+
+  public interface FooStep {
+    BarStep setFoo(String foo);
+  }
+
+  public interface BarStep {
+    BazStep setBar(String bar);
+  }
+
+  public interface BazStep {
+    Build setBaz(int baz);
+  }
+
+  public interface Build {
+    Stepped build();
+  }
+
+  @AutoValue.Builder
+  abstract static class Builder implements FooStep, BarStep, BazStep, Build {}
+}
+```
+
+It might be used like this:
+
+```java
+Stepped stepped = Stepped.builder().setFoo("foo").setBar("bar").setBaz(3).build();
+```
+
+The idea is that the only way to build an instance of `Stepped`
+is to go through the steps imposed by the `FooStep`, `BarStep`, and
+`BazStep` interfaces to set the properties in order, with a final build step.
+
+Once you have set the `baz` property there is nothing else to do except build,
+so you could also combine the `setBaz` and `build` methods like this:
+
+```java
+  ...
+
+  public interface BazStep {
+    Stepped setBazAndBuild(int baz);
+  }
+
+  @AutoValue.Builder
+  abstract static class Builder implements FooStep, BarStep, BazStep {
+    abstract Builder setBaz(int baz);
+    abstract Stepped build();
+
+    @Override
+    public Stepped setBazAndBuild(int baz) {
+      return setBaz(baz).build();
+    }
+  }
+```
 
 ## <a name="autobuilder"></a> ... create a builder for something other than an `@AutoValue`?
 
@@ -634,5 +701,66 @@ Sometimes you want to make a builder like the kind described here, but have it
 build something other than an `@AutoValue` class, or even call a static method.
 In that case you can use `@AutoBuilder`. See
 [its documentation](autobuilder.md).
+
+Sometimes you want to use a different build method for your property. This is
+especially applicable for `ImmutableMap`, which has two different build methods.
+`builder.buildOrThrow()` is used as the default build method for AutoValue. You
+might prefer to use `builder.buildKeepingLast()` instead, so if the same key is
+put more than once then the last value is retained rather than throwing an
+exception. AutoValue doesn't currently have a way to request this, but here is a
+workaround if you need it. Let's say you have a class like this:
+
+```java
+  @AutoValue
+  public abstract class Foo {
+    public abstract ImmutableMap<Integer, String> map();
+    ...
+
+    @AutoValue.Builder
+    public abstract static class Builder {
+      public abstract ImmutableMap.Builder<Integer, String> mapBuilder();
+      public abstract Foo build();
+    }
+  }
+```
+
+Instead, you could write this:
+
+```java
+  @AutoValue
+  public abstract class Foo {
+    public abstract ImmutableMap<Integer, String> map();
+    
+    // #start
+    // Needed only if your class has toBuilder() method
+    public Builder toBuilder() {
+      Builder builder = autoToBuilder();
+      builder.mapBuilder().putAll(map());
+      return builder;
+    }
+
+    abstract Builder autoToBuilder(); // not public
+    // #end
+
+    @AutoValue.Builder
+    public abstract static class Builder {
+
+      private final ImmutableMap.Builder<Integer, String> mapBuilder = ImmutableMap.builder();
+
+      public ImmutableMap.Builder<Integer, String> mapBuilder() {
+        return mapBuilder;
+      }
+
+      abstract Builder setMap(ImmutableMap<Integer, String> map); // not public
+
+      abstract Foo autoBuild(); // not public
+
+      public Foo build() {
+        setMap(mapBuilder.buildKeepingLast());
+        return autoBuild();
+      }
+    }
+  }
+```
 
 [protobuf]: https://developers.google.com/protocol-buffers/docs/reference/java-generated#builders

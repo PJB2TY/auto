@@ -16,12 +16,13 @@
 package com.google.auto.value.processor;
 
 import static com.google.auto.common.MoreElements.getLocalAndInheritedMethods;
+import static com.google.auto.common.MoreStreams.toImmutableList;
 import static com.google.auto.value.processor.ClassNames.AUTO_VALUE_NAME;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Sets.difference;
 import static com.google.common.collect.Sets.intersection;
 import static java.util.Comparator.naturalOrder;
 import static java.util.stream.Collectors.joining;
-import static java.util.stream.Collectors.toList;
 
 import com.google.auto.service.AutoService;
 import com.google.auto.value.extension.AutoValueExtension;
@@ -33,7 +34,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import java.lang.annotation.Annotation;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -46,7 +46,6 @@ import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.Processor;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.lang.model.element.AnnotationMirror;
-import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.TypeKind;
@@ -80,37 +79,40 @@ public class AutoValueProcessor extends AutoValueishProcessor {
 
   @VisibleForTesting
   AutoValueProcessor(ClassLoader loaderForExtensions) {
-    super(AUTO_VALUE_NAME);
-    this.extensions = null;
-    this.loaderForExtensions = loaderForExtensions;
+    this(ImmutableList.of(), loaderForExtensions);
   }
 
   @VisibleForTesting
-  public AutoValueProcessor(Iterable<? extends AutoValueExtension> extensions) {
-    super(AUTO_VALUE_NAME);
-    this.extensions = ImmutableList.copyOf(extensions);
-    this.loaderForExtensions = null;
+  public AutoValueProcessor(Iterable<? extends AutoValueExtension> testExtensions) {
+    this(testExtensions, null);
+  }
+
+  private AutoValueProcessor(
+      Iterable<? extends AutoValueExtension> testExtensions, ClassLoader loaderForExtensions) {
+    super(AUTO_VALUE_NAME, /* appliesToInterfaces= */ false);
+    this.extensions = ImmutableList.copyOf(testExtensions);
+    this.loaderForExtensions = loaderForExtensions;
   }
 
   // Depending on how this AutoValueProcessor was constructed, we might already have a list of
-  // extensions when init() is run, or, if `extensions` is null, we have a ClassLoader that will be
-  // used to get the list using the ServiceLoader API.
+  // extensions when init() is run, or, if `loaderForExtensions` is not null, it is a ClassLoader
+  // that will be used to get the list using the ServiceLoader API.
   private ImmutableList<AutoValueExtension> extensions;
   private final ClassLoader loaderForExtensions;
 
   @VisibleForTesting
   static ImmutableList<AutoValueExtension> extensionsFromLoader(ClassLoader loader) {
-    return ImmutableList.copyOf(
-        Iterables.filter(
-            SimpleServiceLoader.load(AutoValueExtension.class, loader),
-            ext -> !ext.getClass().getName().equals(OLD_MEMOIZE_EXTENSION)));
+    return SimpleServiceLoader.load(AutoValueExtension.class, loader).stream()
+        .filter(ext -> !ext.getClass().getName().equals(OLD_MEMOIZE_EXTENSION))
+        .collect(toImmutableList());
   }
 
   @Override
   public synchronized void init(ProcessingEnvironment processingEnv) {
     super.init(processingEnv);
 
-    if (extensions == null) {
+    if (loaderForExtensions != null) {
+      checkState(extensions.isEmpty());
       try {
         extensions = extensionsFromLoader(loaderForExtensions);
       } catch (RuntimeException | Error e) {
@@ -131,14 +133,17 @@ public class AutoValueProcessor extends AutoValueishProcessor {
   }
 
   @Override
-  public Set<String> getSupportedOptions() {
+  public ImmutableSet<String> getSupportedOptions() {
     ImmutableSet.Builder<String> builder = ImmutableSet.builder();
     AutoValueExtension.IncrementalExtensionType incrementalType =
         extensions.stream()
             .map(e -> e.incrementalType(processingEnv))
             .min(naturalOrder())
             .orElse(AutoValueExtension.IncrementalExtensionType.ISOLATING);
-    builder.add(OMIT_IDENTIFIERS_OPTION).addAll(optionsFor(incrementalType));
+    builder
+        .add(OMIT_IDENTIFIERS_OPTION)
+        .add(Nullables.NULLABLE_OPTION)
+        .addAll(optionsFor(incrementalType));
     for (AutoValueExtension extension : extensions) {
       builder.addAll(extension.getSupportedOptions());
     }
@@ -164,10 +169,6 @@ public class AutoValueProcessor extends AutoValueishProcessor {
 
   @Override
   void processType(TypeElement type) {
-    if (type.getKind() != ElementKind.CLASS) {
-      errorReporter()
-          .abortWithError(type, "[AutoValueNotClass] @AutoValue only applies to classes");
-    }
     if (ancestorIsAutoValue(type)) {
       errorReporter()
           .abortWithError(type, "[AutoValueExtend] One @AutoValue class may not extend another");
@@ -177,9 +178,8 @@ public class AutoValueProcessor extends AutoValueishProcessor {
           .abortWithError(
               type,
               "[AutoValueImplAnnotation] @AutoValue may not be used to implement an annotation"
-                  + " interface; try using @AutoAnnotation instead");
+                  + " interface; try using @AutoAnnotation or @AutoBuilder instead");
     }
-    checkModifiersIfNested(type);
 
     // We are going to classify the methods of the @AutoValue class into several categories.
     // This covers the methods in the class itself and the ones it inherits from supertypes.
@@ -217,8 +217,9 @@ public class AutoValueProcessor extends AutoValueishProcessor {
     ImmutableMap<String, ExecutableElement> properties =
         propertyNameToMethodMap(propertyMethodsAndTypes.keySet());
 
-    ExtensionContext context = new ExtensionContext(
-        processingEnv, type, properties, propertyMethodsAndTypes, abstractMethods);
+    ExtensionContext context =
+        new ExtensionContext(
+            processingEnv, type, properties, propertyMethodsAndTypes, abstractMethods);
     ImmutableList<AutoValueExtension> applicableExtensions = applicableExtensions(type, context);
     ImmutableSet<ExecutableElement> consumedMethods =
         methodsConsumedByExtensions(
@@ -231,8 +232,9 @@ public class AutoValueProcessor extends AutoValueishProcessor {
       propertyMethodsAndTypes =
           propertyMethodsIn(immutableSetDifference(abstractMethods, toBuilderMethods), type);
       properties = propertyNameToMethodMap(propertyMethodsAndTypes.keySet());
-      context = new ExtensionContext(
-          processingEnv, type, properties, propertyMethodsAndTypes, allAbstractMethods);
+      context =
+          new ExtensionContext(
+              processingEnv, type, properties, propertyMethodsAndTypes, allAbstractMethods);
     }
 
     ImmutableSet<ExecutableElement> propertyMethods = propertyMethodsAndTypes.keySet();
@@ -241,10 +243,16 @@ public class AutoValueProcessor extends AutoValueishProcessor {
 
     String finalSubclass = TypeSimplifier.simpleNameOf(generatedSubclassName(type, 0));
     AutoValueTemplateVars vars = new AutoValueTemplateVars();
-    vars.types = processingEnv.getTypeUtils();
     vars.identifiers = !processingEnv.getOptions().containsKey(OMIT_IDENTIFIERS_OPTION);
-    defineSharedVarsForType(type, methods, vars);
-    defineVarsForType(type, vars, toBuilderMethods, propertyMethodsAndTypes, builder);
+    Nullables nullables = Nullables.fromMethods(processingEnv, methods);
+    defineSharedVarsForType(type, methods, nullables, vars);
+    defineVarsForType(
+        type,
+        vars,
+        toBuilderMethods,
+        propertyMethodsAndTypes,
+        builder,
+        nullables);
     vars.builtType = vars.origClass + vars.actualTypes;
     vars.build = "new " + finalSubclass + vars.actualTypes;
 
@@ -421,18 +429,22 @@ public class AutoValueProcessor extends AutoValueishProcessor {
       AutoValueTemplateVars vars,
       ImmutableSet<ExecutableElement> toBuilderMethods,
       ImmutableMap<ExecutableElement, TypeMirror> propertyMethodsAndTypes,
-      Optional<BuilderSpec.Builder> maybeBuilder) {
+      Optional<BuilderSpec.Builder> maybeBuilder,
+      Nullables nullables) {
     ImmutableSet<ExecutableElement> propertyMethods = propertyMethodsAndTypes.keySet();
-    // We can't use ImmutableList.toImmutableList() for obscure Google-internal reasons.
     vars.toBuilderMethods =
-        ImmutableList.copyOf(toBuilderMethods.stream().map(SimpleMethod::new).collect(toList()));
+        toBuilderMethods.stream().map(SimpleMethod::new).collect(toImmutableList());
     vars.toBuilderConstructor = !vars.toBuilderMethods.isEmpty();
     ImmutableListMultimap<ExecutableElement, AnnotationMirror> annotatedPropertyFields =
         propertyFieldAnnotationMap(type, propertyMethods);
     ImmutableListMultimap<ExecutableElement, AnnotationMirror> annotatedPropertyMethods =
         propertyMethodAnnotationMap(type, propertyMethods);
     vars.props =
-        propertySet(propertyMethodsAndTypes, annotatedPropertyFields, annotatedPropertyMethods);
+        propertySet(
+            propertyMethodsAndTypes,
+            annotatedPropertyFields,
+            annotatedPropertyMethods,
+            nullables);
     // Check for @AutoValue.Builder and add appropriate variables if it is present.
     maybeBuilder.ifPresent(
         builder -> {
@@ -492,7 +504,7 @@ public class AutoValueProcessor extends AutoValueishProcessor {
     if (Collections.disjoint(a, b)) {
       return a;
     } else {
-      return ImmutableSet.copyOf(difference(a, b));
+      return difference(a, b).immutableCopy();
     }
   }
 }

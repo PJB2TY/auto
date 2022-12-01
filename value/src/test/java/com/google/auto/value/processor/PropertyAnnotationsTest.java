@@ -15,12 +15,13 @@
  */
 package com.google.auto.value.processor;
 
-import static com.google.common.truth.Truth.assertAbout;
-import static com.google.testing.compile.JavaSourceSubjectFactory.javaSource;
+import static com.google.testing.compile.CompilationSubject.assertThat;
+import static com.google.testing.compile.Compiler.javac;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
+import com.google.testing.compile.Compilation;
 import com.google.testing.compile.JavaFileObjects;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Inherited;
@@ -40,8 +41,7 @@ import org.junit.runners.JUnit4;
  */
 @RunWith(JUnit4.class)
 public class PropertyAnnotationsTest {
-  private static final String TEST_ANNOTATION =
-      "@PropertyAnnotationsTest.TestAnnotation";
+  private static final String TEST_ANNOTATION = "@PropertyAnnotationsTest.TestAnnotation";
   private static final String TEST_ARRAY_ANNOTATION =
       "@PropertyAnnotationsTest.TestArrayAnnotation";
 
@@ -272,12 +272,15 @@ public class PropertyAnnotationsTest {
             .addMethodAnnotations(expectedMethodAnnotations)
             .build();
 
-    assertAbout(javaSource())
-        .that(javaFileObject)
-        .processedWith(new AutoValueProcessor())
-        .compilesWithoutError()
-        .and()
-        .generatesSources(expectedOutput);
+    Compilation compilation =
+        javac()
+            .withOptions("-A" + Nullables.NULLABLE_OPTION + "=")
+            .withProcessors(new AutoValueProcessor())
+            .compile(javaFileObject);
+    assertThat(compilation).succeeded();
+    assertThat(compilation)
+        .generatedSourceFile("foo.bar.AutoValue_Baz")
+        .hasSourceEquivalentTo(expectedOutput);
   }
 
   @Test
@@ -445,10 +448,12 @@ public class PropertyAnnotationsTest {
     assertGeneratedMatches(
         getImports(PropertyAnnotationsTest.class),
         ImmutableList.of(
-            TEST_ARRAY_ANNOTATION + "(testEnums = {PropertyAnnotationsTest.TestEnum.A,"
+            TEST_ARRAY_ANNOTATION
+                + "(testEnums = {PropertyAnnotationsTest.TestEnum.A,"
                 + " PropertyAnnotationsTest.TestEnum.B})"),
         ImmutableList.of(
-            TEST_ARRAY_ANNOTATION + "(testEnums = {PropertyAnnotationsTest.TestEnum.A,"
+            TEST_ARRAY_ANNOTATION
+                + "(testEnums = {PropertyAnnotationsTest.TestEnum.A,"
                 + " PropertyAnnotationsTest.TestEnum.B})"));
   }
 
@@ -505,19 +510,25 @@ public class PropertyAnnotationsTest {
                 "@PropertyAnnotationsTest.InheritedAnnotation")
             .build();
 
+    // Annotations are in lexicographical order of FQN:
+    // @com.google.auto.value.processor.PropertyAnnotationsTest.InheritedAnnotation precedes
+    // @java.lang.Deprecated
     JavaFileObject outputFile =
         new OutputFileBuilder()
             .setImports(imports)
-            .addMethodAnnotations("@Deprecated", "@PropertyAnnotationsTest.InheritedAnnotation")
-            .addFieldAnnotations("@Deprecated", "@PropertyAnnotationsTest.InheritedAnnotation")
+            .addMethodAnnotations("@PropertyAnnotationsTest.InheritedAnnotation", "@Deprecated")
+            .addFieldAnnotations("@PropertyAnnotationsTest.InheritedAnnotation", "@Deprecated")
             .build();
 
-    assertAbout(javaSource())
-        .that(inputFile)
-        .processedWith(new AutoValueProcessor())
-        .compilesWithoutError()
-        .and()
-        .generatesSources(outputFile);
+    Compilation compilation =
+        javac()
+            .withOptions("-A" + Nullables.NULLABLE_OPTION)
+            .withProcessors(new AutoValueProcessor())
+            .compile(inputFile);
+    assertThat(compilation).succeeded();
+    assertThat(compilation)
+        .generatedSourceFile("foo.bar.AutoValue_Baz")
+        .hasSourceEquivalentTo(outputFile);
   }
 
   /**
@@ -540,21 +551,26 @@ public class PropertyAnnotationsTest {
             .addInnerTypes("@Target(ElementType.METHOD) @interface MethodsOnly {}")
             .build();
 
+    // Annotations are in lexicographical order of FQN:
+    // @com.google.auto.value.processor.PropertyAnnotationsTest.InheritedAnnotation precedes
+    // @foo.bar.Baz.MethodsOnly precedes
+    // @java.lang.Deprecated
     JavaFileObject outputFile =
         new OutputFileBuilder()
             .setImports(getImports(PropertyAnnotationsTest.class))
-            .addFieldAnnotations("@Deprecated", "@PropertyAnnotationsTest.InheritedAnnotation")
+            .addFieldAnnotations("@PropertyAnnotationsTest.InheritedAnnotation", "@Deprecated")
             .addMethodAnnotations(
-                "@Deprecated",
-                "@PropertyAnnotationsTest.InheritedAnnotation",
-                "@Baz.MethodsOnly")
+                "@PropertyAnnotationsTest.InheritedAnnotation", "@Baz.MethodsOnly", "@Deprecated")
             .build();
 
-    assertAbout(javaSource())
-        .that(inputFile)
-        .processedWith(new AutoValueProcessor())
-        .compilesWithoutError()
-        .and()
-        .generatesSources(outputFile);
+    Compilation compilation =
+        javac()
+            .withOptions("-A" + Nullables.NULLABLE_OPTION + "=")
+            .withProcessors(new AutoValueProcessor())
+            .compile(inputFile);
+    assertThat(compilation).succeeded();
+    assertThat(compilation)
+        .generatedSourceFile("foo.bar.AutoValue_Baz")
+        .hasSourceEquivalentTo(outputFile);
   }
 }

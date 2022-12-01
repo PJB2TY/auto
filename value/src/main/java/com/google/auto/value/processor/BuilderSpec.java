@@ -16,7 +16,9 @@
 package com.google.auto.value.processor;
 
 import static com.google.auto.common.MoreElements.getLocalAndInheritedMethods;
+import static com.google.auto.common.MoreStreams.toImmutableSet;
 import static com.google.auto.value.processor.AutoValueishProcessor.hasAnnotationMirror;
+import static com.google.auto.value.processor.AutoValueishProcessor.hasVisibleNoArgConstructor;
 import static com.google.auto.value.processor.AutoValueishProcessor.nullableAnnotationFor;
 import static com.google.auto.value.processor.ClassNames.AUTO_VALUE_BUILDER_NAME;
 import static com.google.common.collect.Sets.immutableEnumSet;
@@ -35,7 +37,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -86,16 +87,9 @@ class BuilderSpec {
     Optional<TypeElement> builderTypeElement = Optional.empty();
     for (TypeElement containedClass : typesIn(autoValueClass.getEnclosedElements())) {
       if (hasAnnotationMirror(containedClass, AUTO_VALUE_BUILDER_NAME)) {
-        if (!CLASS_OR_INTERFACE.contains(containedClass.getKind())) {
-          errorReporter.reportError(
-              containedClass,
-              "[AutoValueBuilderClass] @AutoValue.Builder can only apply to a class or an"
-                  + " interface");
-        } else if (!containedClass.getModifiers().contains(Modifier.STATIC)) {
-          errorReporter.reportError(
-              containedClass,
-              "[AutoValueInnerBuilder] @AutoValue.Builder cannot be applied to a non-static class");
-        } else if (builderTypeElement.isPresent()) {
+        findBuilderError(containedClass)
+            .ifPresent(error -> errorReporter.reportError(containedClass, "%s", error));
+        if (builderTypeElement.isPresent()) {
           errorReporter.reportError(
               containedClass,
               "[AutoValueTwoBuilders] %s already has a Builder: %s",
@@ -112,6 +106,24 @@ class BuilderSpec {
     } else {
       return Optional.empty();
     }
+  }
+
+  /** Finds why this {@code @AutoValue.Builder} class is bad, if it is bad. */
+  private Optional<String> findBuilderError(TypeElement builderTypeElement) {
+    if (!CLASS_OR_INTERFACE.contains(builderTypeElement.getKind())) {
+      return Optional.of(
+          "[AutoValueBuilderClass] @AutoValue.Builder can only apply to a class or an"
+              + " interface");
+    } else if (!builderTypeElement.getModifiers().contains(Modifier.STATIC)) {
+      return Optional.of(
+          "[AutoValueInnerBuilder] @AutoValue.Builder cannot be applied to a non-static class");
+    } else if (builderTypeElement.getKind().equals(ElementKind.CLASS)
+        && !hasVisibleNoArgConstructor(builderTypeElement)) {
+      return Optional.of(
+          "[AutoValueBuilderConstructor] @AutoValue.Builder class must have a non-private no-arg"
+              + " constructor");
+    }
+    return Optional.empty();
   }
 
   /** Representation of an {@code AutoValue.Builder} class or interface. */
@@ -315,6 +327,7 @@ class BuilderSpec {
               autoValueClass,
               typeParamsString());
         }
+        errorReporter.abortIfAnyError();
         return;
       }
       this.buildMethod = Iterables.getOnlyElement(buildMethods);
@@ -330,15 +343,15 @@ class BuilderSpec {
       vars.builderPropertyBuilders =
           ImmutableMap.copyOf(classifier.propertyNameToPropertyBuilder());
 
-      Set<Property> required = new LinkedHashSet<>(vars.props);
-      for (Property property : vars.props) {
-        if (property.isNullable()
-            || property.getOptional() != null
-            || vars.builderPropertyBuilders.containsKey(property.getName())) {
-          required.remove(property);
-        }
-      }
-      vars.builderRequiredProperties = ImmutableSet.copyOf(required);
+      ImmutableSet<Property> requiredProperties =
+          vars.props.stream()
+              .filter(p -> !p.isNullable())
+              .filter(p -> p.getBuilderInitializer().isEmpty())
+              .filter(p -> !p.hasDefault())
+              .filter(p -> !vars.builderPropertyBuilders.containsKey(p.getName()))
+              .collect(toImmutableSet());
+      vars.builderRequiredProperties =
+          BuilderRequiredProperties.of(vars.props, requiredProperties);
     }
   }
 
@@ -378,8 +391,7 @@ class BuilderSpec {
       this.optional = optional;
     }
 
-    // Not accessed from templates so doesn't have to be public.
-    String getName() {
+    public String getName() {
       return name;
     }
 

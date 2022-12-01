@@ -37,7 +37,7 @@ import javax.lang.model.type.TypeMirror;
  */
 @AutoValue
 abstract class FactoryDescriptor {
-  private static final CharMatcher invalidIdentifierCharacters =
+  private static final CharMatcher INVALID_IDENTIFIER_CHARACTERS =
       new CharMatcher() {
         @Override
         public boolean matches(char c) {
@@ -46,16 +46,24 @@ abstract class FactoryDescriptor {
       };
 
   abstract PackageAndClass name();
+
   abstract TypeMirror extendingType();
+
   abstract ImmutableSet<TypeMirror> implementingTypes();
+
   abstract boolean publicType();
+
   abstract ImmutableSet<FactoryMethodDescriptor> methodDescriptors();
+
   abstract ImmutableSet<ImplementationMethodDescriptor> implementationMethodDescriptors();
+
   abstract boolean allowSubclasses();
+
   abstract ImmutableMap<Key, ProviderField> providers();
 
   final AutoFactoryDeclaration declaration() {
-    return Iterables.getFirst(methodDescriptors(), null).declaration();
+    // There is always at least one method descriptor.
+    return methodDescriptors().iterator().next().declaration();
   }
 
   private static class UniqueNameSet {
@@ -111,7 +119,7 @@ abstract class FactoryDescriptor {
                 default:
                   String providerName =
                       uniqueNames.getUniqueName(
-                          invalidIdentifierCharacters.replaceFrom(key.toString(), '_')
+                          INVALID_IDENTIFIER_CHARACTERS.replaceFrom(key.toString(), '_')
                               + "Provider");
                   Optional<AnnotationMirror> nullable =
                       parameters.stream()
@@ -216,8 +224,7 @@ abstract class FactoryDescriptor {
    * in the same order.
    */
   private static boolean areDuplicateMethodDescriptors(
-      FactoryMethodDescriptor factory,
-      ImplementationMethodDescriptor implementation) {
+      FactoryMethodDescriptor factory, ImplementationMethodDescriptor implementation) {
 
     if (!factory.name().equals(implementation.name())) {
       return false;

@@ -16,9 +16,11 @@
 package com.google.auto.factory.processor;
 
 import static com.google.auto.common.GeneratedAnnotationSpecs.generatedAnnotationSpec;
+import static com.google.auto.common.MoreStreams.toImmutableList;
 import static com.squareup.javapoet.MethodSpec.constructorBuilder;
 import static com.squareup.javapoet.MethodSpec.methodBuilder;
 import static com.squareup.javapoet.TypeSpec.classBuilder;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
 import static javax.lang.model.element.Modifier.FINAL;
@@ -26,14 +28,12 @@ import static javax.lang.model.element.Modifier.PRIVATE;
 import static javax.lang.model.element.Modifier.PUBLIC;
 import static javax.lang.model.element.Modifier.STATIC;
 
-import com.google.auto.common.AnnotationMirrors;
-import com.google.auto.common.AnnotationValues;
+import com.google.auto.common.MoreTypes;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
-import com.google.common.collect.Streams;
 import com.squareup.javapoet.AnnotationSpec;
 import com.squareup.javapoet.ClassName;
 import com.squareup.javapoet.CodeBlock;
@@ -45,19 +45,14 @@ import com.squareup.javapoet.TypeName;
 import com.squareup.javapoet.TypeSpec;
 import com.squareup.javapoet.TypeVariableName;
 import java.io.IOException;
-import java.lang.annotation.Target;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Optional;
-import java.util.stream.Stream;
 import javax.annotation.processing.Filer;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.inject.Inject;
 import javax.inject.Provider;
 import javax.lang.model.SourceVersion;
-import javax.lang.model.element.AnnotationMirror;
-import javax.lang.model.element.Element;
-import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.TypeVariable;
@@ -79,12 +74,10 @@ final class FactoryWriter {
     this.factoriesBeingCreated = factoriesBeingCreated;
   }
 
-  void writeFactory(FactoryDescriptor descriptor)
-      throws IOException {
+  void writeFactory(FactoryDescriptor descriptor) throws IOException {
     String factoryName = descriptor.name().className();
     TypeSpec.Builder factory =
-        classBuilder(factoryName)
-            .addOriginatingElement(descriptor.declaration().targetType());
+        classBuilder(factoryName).addOriginatingElement(descriptor.declaration().targetType());
     generatedAnnotationSpec(
             elements,
             sourceVersion,
@@ -176,7 +169,7 @@ final class FactoryWriter {
             checkNotNull = false;
           }
         } else {
-          ProviderField provider = descriptor.providers().get(parameter.key());
+          ProviderField provider = requireNonNull(descriptor.providers().get(parameter.key()));
           argument = CodeBlock.of(provider.name());
           if (parameter.isProvider()) {
             // Providers are checked for nullness in the Factory's constructor.
@@ -198,8 +191,7 @@ final class FactoryWriter {
     }
   }
 
-  private void addImplementationMethods(
-      TypeSpec.Builder factory, FactoryDescriptor descriptor) {
+  private void addImplementationMethods(TypeSpec.Builder factory, FactoryDescriptor descriptor) {
     for (ImplementationMethodDescriptor methodDescriptor :
         descriptor.implementationMethodDescriptors()) {
       MethodSpec.Builder implementationMethod =
@@ -228,42 +220,15 @@ final class FactoryWriter {
     ImmutableList.Builder<ParameterSpec> builder = ImmutableList.builder();
     for (Parameter parameter : parameters) {
       TypeName type = resolveTypeName(parameter.type().get());
-      // Remove TYPE_USE annotations, since resolveTypeName will already have included those in
-      // the TypeName it returns.
-      List<AnnotationSpec> annotations =
-          Stream.of(parameter.nullable(), parameter.key().qualifier())
-              .flatMap(Streams::stream)
-              .filter(a -> !isTypeUseAnnotation(a))
+      ImmutableList<AnnotationSpec> annotations =
+          parameter.annotations().stream()
               .map(AnnotationSpec::get)
-              .collect(toList());
+              .collect(toImmutableList());
       ParameterSpec parameterSpec =
-          ParameterSpec.builder(type, parameter.name())
-              .addAnnotations(annotations)
-              .build();
+          ParameterSpec.builder(type, parameter.name()).addAnnotations(annotations).build();
       builder.add(parameterSpec);
     }
     return builder.build();
-  }
-
-  private static boolean isTypeUseAnnotation(AnnotationMirror mirror) {
-    Element annotationElement = mirror.getAnnotationType().asElement();
-    // This is basically equivalent to:
-    //    Target target = annotationElement.getAnnotation(Target.class);
-    //    return target != null
-    //        && Arrays.asList(annotationElement.getAnnotation(Target.class)).contains(TYPE_USE);
-    // but that might blow up if the annotation is being compiled at the same time and has an
-    // undefined identifier in its @Target values. The rigmarole below avoids that problem.
-    Optional<AnnotationMirror> maybeTargetMirror =
-        Mirrors.getAnnotationMirror(annotationElement, Target.class);
-    return maybeTargetMirror
-        .map(
-            targetMirror ->
-                AnnotationValues.getEnums(
-                        AnnotationMirrors.getAnnotationValue(targetMirror, "value"))
-                    .stream()
-                    .map(VariableElement::getSimpleName)
-                    .anyMatch(name -> name.contentEquals("TYPE_USE")))
-        .orElse(false);
   }
 
   private static void addCheckNotNullMethod(
@@ -342,7 +307,26 @@ final class FactoryWriter {
     for (ProviderField provider : descriptor.providers().values()) {
       typeVariables.addAll(getReferencedTypeParameterNames(provider.key().type().get()));
     }
+    // If a parent type has a type parameter, like FooFactory<T>, then the generated factory needs
+    // to have the same parameter, like FooImplFactory<T> extends FooFactory<T>. This is a little
+    // approximate, at least in the case where there is more than one parent type that has a type
+    // parameter. But that should be pretty rare, so let's keep it simple for now.
+    typeVariables.addAll(typeVariablesFrom(descriptor.extendingType()));
+    for (TypeMirror implementing : descriptor.implementingTypes()) {
+      typeVariables.addAll(typeVariablesFrom(implementing));
+    }
     return typeVariables.build();
+  }
+
+  private static List<TypeVariableName> typeVariablesFrom(TypeMirror type) {
+    if (type.getKind().equals(TypeKind.DECLARED)) {
+      DeclaredType declaredType = MoreTypes.asDeclared(type);
+      return declaredType.getTypeArguments().stream()
+          .filter(t -> t.getKind().equals(TypeKind.TYPEVAR))
+          .map(t -> TypeVariableName.get(MoreTypes.asTypeVariable(t)))
+          .collect(toList());
+    }
+    return ImmutableList.of();
   }
 
   private static ImmutableSet<TypeVariableName> getMethodTypeVariables(

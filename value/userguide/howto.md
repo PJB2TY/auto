@@ -315,6 +315,58 @@ public class Names {
 }
 ```
 
+In Java the method will usually be static. In Kotlin, which doesn't have static
+methods as such, a normal function can be used:
+
+```kotlin
+public class Names {
+  @AutoAnnotation public fun named(value: String): Named {
+    return AutoAnnotation_Names_named(value);
+  }
+}
+```
+
+Kotlin also allows you to instantiate annotations directly, so you may not need
+AutoAnnotation:
+
+```kotlin
+public class Names {
+  public fun named(value: String): Named {
+    return Named(value = value)
+  }
+}
+```
+
+If your annotation has several elements, you may prefer to use `@AutoBuilder`:
+
+```java
+public @interface Named {
+  String value();
+  int priority() default 0;
+  int size() default 0;
+}
+
+public class Names {
+  @AutoBuilder(ofClass = Named.class)
+  public interface NamedBuilder {
+    NamedBuilder value(String x);
+    NamedBuilder priority(int x);
+    NamedBuilder size(int x);
+    Named build();
+  }
+
+  public static NamedBuilder namedBuilder() {
+    return new AutoBuilder_Names_namedBuilder();
+  }
+
+  ...
+    Named named1 = namedBuilder().value("O'Cruiskeen").priority(17).size(23).build();
+    Named named2 = namedBuilder().value("O'Cruiskeen").build();
+    // priority and size get their default values
+  ...
+}
+```
+
 For more details, see the [`AutoAnnotation`
 javadoc](http://github.com/google/auto/blob/master/value/src/main/java/com/google/auto/value/AutoAnnotation.java#L24).
 
@@ -608,7 +660,7 @@ variant as just described.
 ### Copying to the generated class
 
 If you want to copy annotations from your `@AutoValue`-annotated class to the
-generated `AutoValue_...` implemention, annotate your class with
+generated `AutoValue_...` implementation, annotate your class with
 [`@AutoValue.CopyAnnotations`].
 
 For example, if `Example.java` is:
@@ -708,10 +760,10 @@ Song {
     We're far from the shallow now.,
   artists = [
     Artist {
-      name = "Lady Gaga",
+      name = Lady Gaga,
     },
     Artist {
-      name = "Bradley Cooper",
+      name = Bradley Cooper,
     }
   ],
 }
